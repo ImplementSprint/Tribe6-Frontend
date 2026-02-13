@@ -1,70 +1,108 @@
 name: Mobile CI/CD Pipeline
 
 on:
-  push:
-    branches: ["**"]
-    paths:
-      - 'SYSTEM_DIR/**'
-      - '.github/workflows/mobile-ci-cd.yml'
-      - '.github/workflows/governance-checks.yml'
-  pull_request:
-    paths: ['SYSTEM_DIR/**']
+  workflow_call:
+    inputs:
+      system-dir:
+        required: true
+        type: string
+        description: 'Project directory name (e.g. pakiPARK-Mobile)'
+      sonar-project-key:
+        required: true
+        type: string
+        description: 'SonarCloud project key'
+      sonar-organization:
+        required: false
+        type: string
+        default: 'implementsprint'
+        description: 'SonarCloud organization'
+      coverage-threshold:
+        required: false
+        type: number
+        default: 80
+        description: 'Minimum code coverage percentage'
 
 jobs:
+  # ── Stage 1: Governance Checks ──────────────────────────────────
   mobile-governance:
-    name: Mobile - Governance Checks
-    uses: ./.github/workflows/governance-checks.yml
+    name: Mobile — Governance Checks
+    uses: ./.github/workflows/governance-check.yml
     with:
-      working-directory: 'SYSTEM_DIR'
+      working-directory: ${{ inputs.system-dir }}
       test-command: 'npx jest --coverage --ci --reporters=default'
-      coverage-threshold: 80
+      coverage-threshold: ${{ inputs.coverage-threshold }}
 
+  # ── Stage 2a: Build Android ─────────────────────────────────────
   mobile-build-android:
-    name: Mobile - Build Android
+    name: Mobile — Build Android
     needs: mobile-governance
     runs-on: ubuntu-latest
-    defaults: { run: { working-directory: ./SYSTEM_DIR } }
+    defaults:
+      run:
+        working-directory: ./${{ inputs.system-dir }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 20, cache: 'npm', cache-dependency-path: SYSTEM_DIR/package-lock.json }
-      - uses: actions/setup-java@v4
-        with: { distribution: 'temurin', java-version: '17' }
-      - run: npm ci
-      - run: |
-          if [ -d "android" ]; then cd android && chmod +x gradlew && ./gradlew assembleRelease --no-daemon; fi
-      - uses: actions/upload-artifact@v4
-        with: { name: mobile-android-apk, path: SYSTEM_DIR/android/app/build/outputs/apk/release/*.apk }
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: ${{ inputs.system-dir }}/package-lock.json
+
+      - name: Setup Java (Android SDK)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build Android APK
+        run: |
+          if [ -d "android" ]; then
+            cd android && chmod +x gradlew && ./gradlew assembleRelease --no-daemon
+          else
+            echo "⚠️ No android directory found — skipping Android build"
+          fi
+
+      - name: Upload Android APK
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: ${{ inputs.system-dir }}-android-apk
+          path: ${{ inputs.system-dir }}/android/app/build/outputs/apk/release/*.apk
+          retention-days: 14
+
+  # ── Stage 2b: SonarCloud Quality Gate ───────────────────────────
   mobile-sonarcloud:
-    name: Mobile - SonarCloud Quality Gate
+    name: Mobile — SonarCloud Analysis
     needs: mobile-governance
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
-      - uses: actions/download-artifact@v4
-        with: { name: SYSTEM_DIR-coverage, path: SYSTEM_DIR/coverage }
-      - uses: SonarSource/sonarqube-scan-action@v5.0.0
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download Coverage Report
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.system-dir }}-coverage
+          path: ${{ inputs.system-dir }}/coverage
+
+      - name: Run SonarCloud Scan
+        uses: SonarSource/sonarqube-scan-action@v5.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
-          projectBaseDir: SYSTEM_DIR
+          projectBaseDir: ${{ inputs.system-dir }}
           args: >
-            -Dsonar.organization=implementsprint
-            -Dsonar.projectKey=REPO_NAME_Mobile
+            -Dsonar.organization=${{ inputs.sonar-organization }}
+            -Dsonar.projectKey=${{ inputs.sonar-project-key }}
             -Dsonar.sources=src
             -Dsonar.tests=src
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
-
-  mobile-deploy:
-    name: Mobile - Deploy to Production
-    needs: [mobile-build-android, mobile-sonarcloud]
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    environment: production-mobile
-    steps:
-      - uses: actions/download-artifact@v4
-        with: { name: mobile-android-apk, path: ./apk }
-      - run: echo "🚀 Deploying to Play Store..."
