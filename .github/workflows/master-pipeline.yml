@@ -1,4 +1,4 @@
-name: Master Pipeline Orchestrator
+name: Master Pipeline Orchestrator (Web)
 
 on:
   push:
@@ -7,68 +7,33 @@ on:
     branches: [main, develop]
 
 concurrency:
-  group: master-pipeline-${{ github.ref }}
+  group: web-pipeline-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # ╔══════════════════════════════════════════════════════════════╗
-  # ║  STAGE 1 — pakiPARK-Web Pipeline                           ║
-  # ║  Governance → Build + SonarCloud                            ║
-  # ╚══════════════════════════════════════════════════════════════╝
+  # 🟢 STAGE 1: pakiPARK-Web
   pakipark-web:
     name: pakiPARK-Web Pipeline
     uses: ./.github/workflows/front-end-workflow.yml
     with:
       system-dir: pakiPARK-Web
-      sonar-project-key: Tribe6-Frontend_pakiPARK-Web
+      sonar-project-key: Tribe6_Frontend_pakiPARK-Web
     secrets: inherit
 
-  # ╔══════════════════════════════════════════════════════════════╗
-  # ║  STAGE 2 — pakiSHIP-Web Pipeline                           ║
-  # ║  Runs after pakiPARK-Web completes                          ║
-  # ╚══════════════════════════════════════════════════════════════╝
+  # 🟢 STAGE 2: pakiSHIP-Web
   pakiship-web:
     name: pakiSHIP-Web Pipeline
     needs: pakipark-web
     uses: ./.github/workflows/front-end-workflow.yml
     with:
       system-dir: pakiSHIP-Web
-      sonar-project-key: Tribe6-Frontend_pakiSHIP-Web
+      sonar-project-key: Tribe6_Frontend_pakiSHIP-Web
     secrets: inherit
 
-  # ╔══════════════════════════════════════════════════════════════╗
-  # ║  STAGE 3 — pakiPARK-Mobile Pipeline                        ║
-  # ║  Runs after pakiSHIP-Web completes                          ║
-  # ╚══════════════════════════════════════════════════════════════╝
-  pakipark-mobile:
-    name: pakiPARK-Mobile Pipeline
-    needs: pakiship-web
-    uses: ./.github/workflows/mobile-workflow.yml
-    with:
-      system-dir: pakiPARK-Mobile
-      sonar-project-key: Tribe6-Frontend_pakiPARK-Mobile
-    secrets: inherit
-
-  # ╔══════════════════════════════════════════════════════════════╗
-  # ║  STAGE 4 — pakiSHIP-Mobile Pipeline                        ║
-  # ║  Runs after pakiPARK-Mobile completes                       ║
-  # ╚══════════════════════════════════════════════════════════════╝
-  pakiship-mobile:
-    name: pakiSHIP-Mobile Pipeline
-    needs: pakipark-mobile
-    uses: ./.github/workflows/mobile-workflow.yml
-    with:
-      system-dir: pakiSHIP-Mobile
-      sonar-project-key: Tribe6-Frontend_pakiSHIP-Mobile
-    secrets: inherit
-
-  # ╔══════════════════════════════════════════════════════════════╗
-  # ║  STAGE 5 — Deploy to Staging                               ║
-  # ║  Runs after ALL pipelines pass (main/develop only)          ║
-  # ╚══════════════════════════════════════════════════════════════╝
+  # 🚀 STAGE 3: Deploy Staging (Web)
   deploy-staging-pakipark-web:
     name: Staging — pakiPARK-Web
-    needs: [pakipark-web, pakiship-web, pakipark-mobile, pakiship-mobile]
+    needs: [pakipark-web, pakiship-web]
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
     uses: ./.github/workflows/deploy-staging.yml
     with:
@@ -87,63 +52,3 @@ jobs:
       app-type: web
       artifact-name: pakiSHIP-Web-web-build
     secrets: inherit
-
-  deploy-staging-pakipark-mobile:
-    name: Staging — pakiPARK-Mobile
-    needs: deploy-staging-pakiship-web
-    if: ${{ !cancelled() && !failure() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') }}
-    uses: ./.github/workflows/deploy-staging.yml
-    with:
-      system-dir: pakiPARK-Mobile
-      app-type: mobile
-      artifact-name: pakiPARK-Mobile-android-apk
-    secrets: inherit
-
-  deploy-staging-pakiship-mobile:
-    name: Staging — pakiSHIP-Mobile
-    needs: deploy-staging-pakipark-mobile
-    if: ${{ !cancelled() && !failure() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') }}
-    uses: ./.github/workflows/deploy-staging.yml
-    with:
-      system-dir: pakiSHIP-Mobile
-      app-type: mobile
-      artifact-name: pakiSHIP-Mobile-android-apk
-    secrets: inherit
-
-  # ╔══════════════════════════════════════════════════════════════╗
-  # ║  STAGE 6 — Pipeline Summary                                ║
-  # ╚══════════════════════════════════════════════════════════════╝
-  pipeline-summary:
-    name: Pipeline Summary
-    needs:
-      - pakipark-web
-      - pakiship-web
-      - pakipark-mobile
-      - pakiship-mobile
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Pipeline Results
-        run: |
-          echo "╔══════════════════════════════════════════════╗"
-          echo "║        MASTER PIPELINE SUMMARY               ║"
-          echo "╠══════════════════════════════════════════════╣"
-          echo "║ Branch:   ${{ github.ref_name }}"
-          echo "║ Commit:   ${{ github.sha }}"
-          echo "║ Actor:    ${{ github.actor }}"
-          echo "╠══════════════════════════════════════════════╣"
-          echo "║ pakiPARK-Web:     ${{ needs.pakipark-web.result }}"
-          echo "║ pakiSHIP-Web:     ${{ needs.pakiship-web.result }}"
-          echo "║ pakiPARK-Mobile:  ${{ needs.pakipark-mobile.result }}"
-          echo "║ pakiSHIP-Mobile:  ${{ needs.pakiship-mobile.result }}"
-          echo "╚══════════════════════════════════════════════╝"
-
-          # Fail the summary if any pipeline failed
-          if [[ "${{ needs.pakipark-web.result }}" == "failure" ]] || \
-             [[ "${{ needs.pakiship-web.result }}" == "failure" ]] || \
-             [[ "${{ needs.pakipark-mobile.result }}" == "failure" ]] || \
-             [[ "${{ needs.pakiship-mobile.result }}" == "failure" ]]; then
-            echo "❌ One or more pipelines failed!"
-            exit 1
-          fi
-          echo "✅ All pipelines completed successfully!"
